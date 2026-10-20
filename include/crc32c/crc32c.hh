@@ -36,18 +36,18 @@
 
 #if defined(__x86_64__) || defined(_M_X64)
 #include <nmmintrin.h>
-#define HASHES_CRC32C_X86 1
+#define CRC32C_X86 1
 #elif defined(__aarch64__) && (defined(__GNUC__) || defined(__clang__))
 #include <arm_acle.h>
-#define HASHES_CRC32C_ARM 1
+#define CRC32C_ARM 1
 #if defined(__linux__) && !defined(__ARM_FEATURE_CRC32)
 #include <sys/auxv.h>
 #endif
 #endif
 
-namespace hashes {
+namespace kronuz::crc32c {
 
-namespace crc32c_detail {
+namespace detail {
 
 inline constexpr std::uint32_t poly = 0x82f63b78u;  // reflected 0x1edc6f41
 
@@ -107,7 +107,7 @@ inline std::uint64_t load64(const unsigned char* p) noexcept {
 }
 
 // Defines NAME(crc, p, n): three lanes per 3 KiB stride, merged with shift constants, then 8-byte and 1-byte tails.
-#define HASHES_CRC32C_HARDWARE(NAME, TARGET, STEP8, STEP1) \
+#define CRC32C_HARDWARE(NAME, TARGET, STEP8, STEP1) \
 	__attribute__((target(TARGET))) inline std::uint32_t NAME(std::uint32_t crc, const unsigned char* p, std::size_t n) noexcept { \
 		for (; n >= 3 * lane; p += 3 * lane, n -= 3 * lane) { \
 			std::uint64_t a = crc, b = 0, c = 0; \
@@ -125,16 +125,16 @@ inline std::uint64_t load64(const unsigned char* p) noexcept {
 		return crc; \
 	}
 
-#if HASHES_CRC32C_X86
-HASHES_CRC32C_HARDWARE(x86_update, "sse4.2", _mm_crc32_u64, _mm_crc32_u8)
+#if CRC32C_X86
+CRC32C_HARDWARE(x86_update, "sse4.2", _mm_crc32_u64, _mm_crc32_u8)
 inline bool hardware_available() noexcept {
 	static const bool available = __builtin_cpu_supports("sse4.2");
 	return available;
 }
-#elif HASHES_CRC32C_ARM
-#define HASHES_CRC32C_ARM_STEP8(c, v) std::uint64_t(__crc32cd(std::uint32_t(c), (v)))
-HASHES_CRC32C_HARDWARE(arm_update, "+crc", HASHES_CRC32C_ARM_STEP8, __crc32cb)
-#undef HASHES_CRC32C_ARM_STEP8
+#elif CRC32C_ARM
+#define CRC32C_ARM_STEP8(c, v) std::uint64_t(__crc32cd(std::uint32_t(c), (v)))
+CRC32C_HARDWARE(arm_update, "+crc", CRC32C_ARM_STEP8, __crc32cb)
+#undef CRC32C_ARM_STEP8
 inline bool hardware_available() noexcept {
 #if defined(__ARM_FEATURE_CRC32) || defined(__APPLE__)
 	return true;
@@ -148,18 +148,18 @@ inline bool hardware_available() noexcept {
 #else
 inline bool hardware_available() noexcept { return false; }
 #endif
-#undef HASHES_CRC32C_HARDWARE
+#undef CRC32C_HARDWARE
 
 inline std::uint32_t update(std::uint32_t crc, const unsigned char* p, std::size_t n) noexcept {
-#if HASHES_CRC32C_X86
+#if CRC32C_X86
 	if (hardware_available()) { return x86_update(crc, p, n); }
-#elif HASHES_CRC32C_ARM
+#elif CRC32C_ARM
 	if (hardware_available()) { return arm_update(crc, p, n); }
 #endif
 	return table_update(crc, p, n);
 }
 
-}  // namespace crc32c_detail
+}  // namespace detail
 
 // Incremental CRC-32C: feed bytes in any number of pieces, then read value().
 class Crc32c {
@@ -168,12 +168,12 @@ public:
 	constexpr explicit Crc32c(std::uint32_t value) noexcept : state_(~value) {}
 
 	Crc32c& update(const void* data, std::size_t size) noexcept {
-		state_ = crc32c_detail::update(state_, static_cast<const unsigned char*>(data), size);
+		state_ = detail::update(state_, static_cast<const unsigned char*>(data), size);
 		return *this;
 	}
 	constexpr Crc32c& update(std::string_view bytes) noexcept {
 		if (std::is_constant_evaluated()) {
-			for (char ch : bytes) { state_ = crc32c_detail::tables[0][(state_ ^ static_cast<unsigned char>(ch)) & 0xff] ^ (state_ >> 8); }
+			for (char ch : bytes) { state_ = detail::tables[0][(state_ ^ static_cast<unsigned char>(ch)) & 0xff] ^ (state_ >> 8); }
 			return *this;
 		}
 		return update(bytes.data(), bytes.size());
@@ -191,8 +191,8 @@ inline std::uint32_t crc32c(const void* data, std::size_t size) noexcept { retur
 // CRC of A‖B from crc32c(A), crc32c(B), and B's length, without rereading the bytes.
 constexpr std::uint32_t crc32c_combine(std::uint32_t crc_a, std::uint32_t crc_b, std::uint64_t size_b) noexcept {
 	// Raw states: ~crc. State after A‖B = shift(stateA, |B|) ^ raw_crc(B from 0); raw_crc(B from 0) = stateB ^ shift(~0, |B|).
-	auto shift = crc32c_detail::shift_factor(size_b);
-	return ~(crc32c_detail::multiply(~crc_a, shift) ^ ~crc_b ^ crc32c_detail::multiply(~0u, shift));
+	auto shift = detail::shift_factor(size_b);
+	return ~(detail::multiply(~crc_a, shift) ^ ~crc_b ^ detail::multiply(~0u, shift));
 }
 
-}  // namespace hashes
+}  // namespace kronuz::crc32c
