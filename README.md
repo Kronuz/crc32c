@@ -64,6 +64,8 @@ ctest --test-dir build --output-on-failure
 ./build/crc32c_bench          # GB/s: hardware, slice-by-8, byte table
 ```
 
+[docs/BENCHMARKS.md](docs/BENCHMARKS.md) has the table measured before the move.
+
 The tests check the standard vectors, the hardware routine against the table routine
 at every length, alignment and starting state, every split around the lane and stride
 boundaries, random fragmentation with empty pieces, combine, and a consumer project
