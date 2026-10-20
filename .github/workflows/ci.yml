@@ -1,0 +1,43 @@
+name: CI
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+  workflow_dispatch:
+  schedule:
+    - cron: '23 7 * * *'  # nightly: flaky timing, and drift in libraries tracked at main
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  ci:
+    uses: Kronuz/cpp-libraries/.github/workflows/cmake.yml@main
+
+  # Which path runs on each runner's real CPU: the test fails if the hardware path is
+  # missing where the CPU has it, then the benchmark prints GB/s per path.
+  hardware:
+    name: hardware-${{ matrix.name }}
+    if: github.event_name != 'schedule'
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: linux-x86_64, os: ubuntu-24.04 }
+          - { name: linux-arm64, os: ubuntu-24.04-arm }
+          - { name: linux-arm64-clang, os: ubuntu-24.04-arm, cxx: clang++ }
+          - { name: macos-arm64, os: macos-15 }
+          - { name: macos-x86_64, os: macos-15-intel }
+    steps:
+      - uses: actions/checkout@v5
+      - name: Configure
+        run: |
+          if [ -n "${{ matrix.cxx }}" ]; then export CXX="${{ matrix.cxx }}"; fi
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DCRC32C_BUILD_BENCHMARKS=ON
+      - name: Build
+        run: cmake --build build --parallel 4
+      - name: Test (hardware path required)
+        run: CRC32C_REQUIRE_HARDWARE=1 ./build/crc32c_test
+      - name: Benchmark
+        run: ./build/crc32c_bench | tee -a "$GITHUB_STEP_SUMMARY"

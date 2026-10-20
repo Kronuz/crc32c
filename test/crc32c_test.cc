@@ -133,6 +133,12 @@ int main() {
 		CHECK(c32::Crc32c(ca).update(buffer.data() + a, b).value() == c32::crc32c(buffer.data(), a + b));
 	}
 
+	// CI sets this on runners whose CPU has the instructions, so a test that quietly ran only the table fails.
+	if (std::getenv("CRC32C_REQUIRE_HARDWARE") && !c32::detail::hardware_available()) {
+		std::fprintf(stderr, "CRC32C_REQUIRE_HARDWARE is set but no hardware path is available\n");
+		++failures;
+	}
+
 	std::printf("crc32c: hardware %s, %s\n", c32::detail::hardware_available() ? "yes" : "no",
 		failures ? "FAILED" : "ok");
 	return failures ? EXIT_FAILURE : EXIT_SUCCESS;
