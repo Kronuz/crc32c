@@ -7,11 +7,11 @@ usage in `README.md` and `docs/API.md`.
 
 ```
 include/crc32c/crc32c.hh   The library: Crc32c, crc32c(), crc32c_combine(), detail:: routines. Header only.
-test/crc32c_test.cc        Vectors, hardware vs table at every length/alignment/state, fragments, empty updates, combine.
+test/crc32c_test.cc        Vectors, hardware vs table and vs the bitwise oracle at every length/alignment/state around every tier boundary, fragments, empty updates, combine, detection before main.
 test/consumer/             A project that links only crc32c::crc32c with fetching disabled (CTest crc32c_consumer).
 fuzz/fuzz_update.cc        libFuzzer target; fuzz/replay.cc runs it as a test (CTest crc32c_fuzz_replay).
 examples/demo.cc           A tour: one shot, incremental, constexpr, combine, resume, which path runs.
-bench/crc32c.cc            GB/s: hardware vs slice-by-8 vs byte table (-DCRC32C_BUILD_BENCHMARKS=ON).
+bench/crc32c.cc            GB/s: hardware vs a plain instruction loop vs slice-by-8 vs byte table (-DCRC32C_BUILD_BENCHMARKS=ON).
 CMakeLists.txt             INTERFACE target crc32c::crc32c; tests/examples/bench only when top-level.
 .github/workflows/ci.yml   The shared cmake workflow, plus a per-runner job that requires the hardware path.
 ```
@@ -38,11 +38,23 @@ Sanitizers: add `-DCMAKE_CXX_FLAGS="-fsanitize=address,undefined"`. Fuzz: Clang 
 - **Empty updates are the identity** at any state, including a null pointer with size 0.
 - **No global target flags.** Hardware code lives in target-attributed functions only.
 - **`Crc32c` keeps the inverted register.** Resume (`Crc32c(v)`) and combine rely on it.
+- **The lane sizes are measured, per architecture.** `lane_large`, `lane_middle` and
+  `lane_small` in the header (and so `smallest_stride`, where the plain loop gives way) come
+  from an A/B at every size on an Intel Core i9 and Apple M-series cores. Change one only
+  with the same A/B on both architectures; a stride that is too short loses to the plain
+  loop (a merge per few steps), one that is too long leaves a long remainder on the slow chain.
+- **No tier may fall behind the loop below it.** The plain loop is the baseline: `crc32c_bench`
+  prints it as `loop`, and `crc32c()` must match it below the smallest stride.
 
 ## Gotchas
 
 - `CRC32C_X86` / `CRC32C_ARM` leak from the header (they gate the test's choice of
   routine); keep them prefixed.
+- Detection calls `__builtin_cpu_init()` before `__builtin_cpu_supports`: on macOS the CPU
+  model is filled in by a constructor that runs after the namespace-scope objects of the
+  program's own files, so a CRC taken while those are constructed would cache "no
+  instructions" for the whole run. The test pins it (`detected_before_main`).
+- The 4 KiB shift tables (`shift_by<K>`) are built at compile time, two per lane tier.
 - A CPU without the instructions runs the table path and the hardware test says
   `hardware no` and passes: that is why CI sets `CRC32C_REQUIRE_HARDWARE=1` per runner.
 - Names `kronuz::crc32c::crc32c` and the namespace share a spelling; inside

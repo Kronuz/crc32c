@@ -33,6 +33,12 @@ extern "C" int LLVMFuzzerTestOneInput(const std::uint8_t* data, std::size_t size
 	std::uint32_t expected = ~bitwise(state, bytes, n);
 	if (c32::detail::table_update(state, bytes, n) != ~expected) { std::abort(); }
 	if (c32::detail::update(state, bytes, n) != ~expected) { std::abort(); }
+#if CRC32C_X86 || CRC32C_ARM
+	if (c32::detail::hardware_available()) {
+		if (c32::detail::hardware_plain(state, bytes, n) != ~expected) { std::abort(); }
+		if (c32::detail::hardware_update(state, bytes, n) != ~expected) { std::abort(); }
+	}
+#endif
 	if (c32::Crc32c(seed).update(bytes, n).value() != expected) { std::abort(); }
 
 	// Cut points taken from the message itself (pieces may be empty).

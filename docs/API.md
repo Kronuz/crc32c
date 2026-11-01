@@ -14,7 +14,7 @@ so `crc32c("123456789") == 0xe3069283` and the CRC of nothing is `0`.
 | `constexpr std::uint32_t value() const` | The CRC of everything appended so far; the object stays appendable. |
 | `std::uint32_t crc32c_combine(crc_a, crc_b, size_b)` | `constexpr`. CRC of A‖B from `crc32c(A)`, `crc32c(B)` and B's length. |
 
-`kronuz::crc32c::detail` holds the routines (`table_update`, `x86_update`/`arm_update`,
+`kronuz::crc32c::detail` holds the routines (`table_update`, `hardware_plain`/`hardware_update`,
 `update`, `hardware_available()`) the tests compare against each other. It is not part
 of the interface, but `detail::hardware_available()` is the supported way to ask which
 path runs.
@@ -23,7 +23,9 @@ path runs.
 
 1. **Hardware.** x86-64 with SSE4.2 (`__builtin_cpu_supports`) and AArch64 with the CRC
    extension (always on Apple; `HWCAP_CRC32` via `getauxval` on Linux; a build with
-   `__ARM_FEATURE_CRC32`).
+   `__ARM_FEATURE_CRC32`). A buffer shorter than 384 bytes on x86-64 (96 on AArch64) runs one
+   chain of the instruction; longer ones run interleaved lanes. See
+   [ARCHITECTURE.md](../ARCHITECTURE.md).
 2. **Slice-by-8 table.** Every other CPU, and constant evaluation.
 
 Both give the same value for the same bytes; the choice is invisible except in speed.

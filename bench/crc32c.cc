@@ -1,5 +1,5 @@
-// CRC-32C throughput: the library's hardware path (three interleaved lanes) against a plain loop
-// of the same instruction on one stream, the slice-by-8 table and the byte-at-a-time table.
+// CRC-32C throughput: the library's hardware path (the plain loop for short buffers, interleaved lanes above) against
+// a plain loop of the same instruction on one stream, the slice-by-8 table and the byte-at-a-time table.
 #include <crc32c/crc32c.hh>
 
 #include <chrono>
@@ -65,7 +65,7 @@ int main() {
 	const bool loop_available = false;
 #endif
 	std::printf("%-10s %12s %12s %12s %12s\n", "bytes", "hw GB/s", "loop GB/s", "slice8 GB/s", "byte GB/s");
-	for (std::size_t n : {64u, 512u, 4096u, 65536u, 1u << 20}) {
+	for (std::size_t n : {16u, 64u, 128u, 256u, 512u, 1024u, 2048u, 4096u, 65536u, 1u << 20}) {
 		auto hw = gb_per_s([&] { return c32::crc32c(data.data(), n); }, n);
 		double lp = 0;
 #ifdef HAVE_INTRINSIC_LOOP

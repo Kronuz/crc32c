@@ -6,26 +6,37 @@ and the platform's intrinsics header, and defines three layers.
 ```
   crc32c(), Crc32c, crc32c_combine      public, constexpr where the table path allows
         |
-  detail::update(state, p, n)           picks hardware or table, once-detected
-      /                 \
-  x86_update / arm_update   table_update     (hardware in target-attributed functions)
+  detail::update(state, p, n)           picks the path; hardware detected once
+      /              |              \
+  hardware_plain   hardware_update   table_update
+  (one chain)      (lane tiers, then the plain loop)
+                   (target-attributed functions)
 ```
 
 ## The paths
 
-The reflected Castagnoli polynomial (`0x82f63b78`) drives both.
+The reflected Castagnoli polynomial (`0x82f63b78`) drives all of them.
 
 1. **Hardware.** `_mm_crc32_u64` on x86-64 and `__crc32cd` on AArch64, in functions
    compiled with the target attribute (`sse4.2`, `+crc`), so the library needs no
    global `-msse4.2` or `-march` flag and a portable binary still runs on a CPU
    without the instructions. Detection runs once and is cached
-   (`__builtin_cpu_supports`, `getauxval(AT_HWCAP)`, always-on on Apple Silicon).
-2. **Three lanes.** The CRC instruction has 3-cycle latency and 1-cycle throughput, so
-   one dependent chain uses a third of the unit. Buffers of 3 KiB and more are split
-   into 3 × 1 KiB lanes computed together; lane states merge with
-   `multiply(state, x^(8·bytes))` modulo the polynomial, and the two shift factors are
-   computed at compile time.
-3. **Table.** Slice-by-8, built at compile time, for CPUs without the instruction and
+   (`__builtin_cpu_supports` after `__builtin_cpu_init`, so a call made while another
+   translation unit's objects are constructed sees the CPU; `getauxval(AT_HWCAP)`;
+   always on for Apple Silicon).
+2. **Plain loop.** A buffer shorter than the smallest stride (384 bytes on x86-64, 96 on
+   AArch64) runs one dependent chain of 8-byte steps and then single bytes, in a leaf
+   function with no frame. Below that size one stride's merge costs more than the
+   latency it hides.
+3. **Lane tiers.** The CRC instruction has 3-cycle latency and 1-cycle throughput, so
+   one dependent chain uses a third of the unit. A longer buffer is cut into strides of
+   three lanes computed together: as many 3 × 1024-byte strides as fit, then 3 × 256,
+   then 3 × 128 bytes on x86-64 (3 × 32 on AArch64), and the plain loop takes what is
+   left. Lane states merge as `shift(a, 2L) ^ shift(b, L) ^ c`, where `shift` multiplies
+   by `x^(8·L)` modulo the polynomial through four byte-indexed tables (4 KiB per
+   constant, built at compile time): a merge is a few loads and no loop. The smallest
+   lane is where a stride starts to pay: 128 bytes on x86-64, 32 on AArch64.
+4. **Table.** Slice-by-8, built at compile time, for CPUs without the instruction and
    for constant evaluation (`Crc32c::update(string_view)` takes the byte-table route
    inside `std::is_constant_evaluated()`).
 

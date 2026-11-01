@@ -8,7 +8,7 @@ Part of [Kronuz C++ Libraries](https://github.com/Kronuz/cpp-libraries), a colle
 ![Header-only](https://img.shields.io/badge/header--only-yes-green.svg)
 
 CRC-32C for C++20: SSE4.2 and ARMv8 instructions picked at run time, slice-by-8 elsewhere,
-constexpr and combine. The hardware routines run three interleaved lanes and are compiled with
+constexpr and combine. The hardware routines run interleaved lanes and are compiled with
 a function-level target attribute, so no global `-msse4.2` or `-march` flag is needed; a
 slice-by-8 table covers other CPUs and compile time. CRC-32C (Castagnoli) is the checksum of
 iSCSI, ext4, Btrfs and [journal](https://github.com/Kronuz/journal); reach for this one header
@@ -18,8 +18,10 @@ when you need it fast and dependency-free.
 
 - **Hardware where the CPU has it.** `_mm_crc32_u64` on x86-64 and `__crc32cd` on AArch64,
   detected once at run time.
-- **Three interleaved lanes.** Buffers of 3 KiB and more run three 1 KiB lanes at once to hide
-  the instruction's latency; shift constants computed at compile time merge the lanes.
+- **Interleaved lanes.** From 384 bytes on x86-64 (96 on AArch64) the buffer runs as strides
+  of three lanes at once to hide the instruction's latency, in tiers of 1 KiB, 256-byte and
+  128-byte lanes (32 on AArch64); shift tables built at compile time merge the lanes. Shorter
+  buffers run one plain chain.
 - **`constexpr`.** `static_assert(crc32c("123456789") == 0xe3069283)` compiles.
 - **Incremental and joinable.** `Crc32c` takes any number of pieces, empty ones included, and
   resumes from a stored CRC; `crc32c_combine` gives the CRC of A‖B from the two CRCs and B's
@@ -93,14 +95,16 @@ throughput, not latency.
 
 | Bytes | M4 Pro: `crc32c()` | loop | slice-by-8 | i9: `crc32c()` | loop | slice-by-8 |
 |---:|---:|---:|---:|---:|---:|---:|
-| 64 | 29.8 | 30.2 | 5.0 | 14.2 | 21.1 | 3.1 |
-| 512 | 13.6 | 13.7 | 2.7 | 18.9 | 20.3 | 2.3 |
-| 4,096 | 18.1 | 10.9 | 2.5 | 17.9 | 12.3 | 2.2 |
-| 1 MiB | 22.4 | 10.6 | 2.4 | 20.3 | 11.1 | 2.2 |
+| 64 | 30.3 | 30.2 | 5.0 | 19.4 | 22.5 | 3.1 |
+| 128 | 28.7 | 23.9 | 3.9 | 28.6 | 30.8 | 2.7 |
+| 512 | 24.2 | 13.9 | 2.7 | 25.5 | 20.4 | 2.3 |
+| 1,024 | 28.0 | 12.1 | 2.5 | 25.6 | 17.2 | 2.2 |
+| 4,096 | 29.9 | 11.1 | 2.4 | 30.4 | 12.2 | 2.2 |
+| 1 MiB | 29.5 | 10.7 | 2.4 | 30.1 | 11.2 | 2.2 |
 
-From 4 KiB the three interleaved lanes run 1.5 to 2.1 times faster than the plain loop. Below
-that `crc32c()` runs the same single chain, and on the i9 the plain loop is faster than it
-(21.1 against 14.2 GB/s at 64 bytes); on the M4 Pro the two are equal. Apple clang 17 on
+Below the smallest stride (96 bytes on the M4 Pro, 384 on the i9) `crc32c()` runs the same plain
+chain as `loop`. Above it the lanes run 1.2 to 2.7 times faster than the plain loop on the M4
+Pro (from 128 bytes) and 1.25 to 2.7 times on the i9 (from 512 bytes). Apple clang 17 on
 macOS, `-O3 -DNDEBUG`, on an Apple M4 Pro (arm64) and an Intel Core i9-9980HK (x86_64):
 
 ```sh
@@ -130,13 +134,15 @@ ctest --test-dir build --output-on-failure
 ./build/crc32c_bench
 ```
 
-The tests check the standard vectors, the hardware routine against the table routine at every
-length, alignment and starting state, every split around the lane and stride boundaries,
-random fragmentation with empty pieces, combine, and a consumer project that links only
+The tests check the standard vectors, the hardware routines against the table routine and a
+bitwise oracle at every length, alignment and starting state around every lane tier's stride
+boundary, every split around the lane and stride boundaries, random fragmentation with empty
+pieces, combine, detection before `main`, and a consumer project that links only
 `crc32c::crc32c` with fetching disabled. The test prints `crc32c: hardware yes|no`;
-`CRC32C_REQUIRE_HARDWARE=1` makes `no` a failure. `crc32c_bench` prints GB/s for the hardware path, a plain loop of the CPU's CRC instruction, the
-slice-by-8 table and the byte table. `-DCRC32C_FUZZ=ON` with Clang builds a libFuzzer target;
-without it a replay driver runs the same checks as a test.
+`CRC32C_REQUIRE_HARDWARE=1` makes `no` a failure. `crc32c_bench` prints GB/s for the hardware
+path, a plain loop of the CPU's CRC instruction, the slice-by-8 table and the byte table.
+`-DCRC32C_FUZZ=ON` with Clang builds a libFuzzer target; without it a replay driver runs the
+same checks as a test.
 
 ## 🤝 Contributing
 

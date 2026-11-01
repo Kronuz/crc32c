@@ -28,6 +28,7 @@
 #pragma once
 
 #include <array>
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
@@ -95,10 +96,27 @@ constexpr std::uint32_t shift_factor(std::uint64_t bytes) noexcept {
 	return result;
 }
 
-// Three interleaved streams hide the 3-cycle latency of the CRC instruction.
-inline constexpr std::size_t lane = 1024;
-inline constexpr std::uint32_t shift_one_lane = shift_factor(lane);
-inline constexpr std::uint32_t shift_two_lanes = shift_factor(2 * lane);
+// a * K modulo the polynomial for a compile-time K, through four byte-indexed tables (4 KiB): the product is four loads,
+// where multiply() above is a 32-step loop.
+template <std::uint32_t K>
+struct shift_table {
+	std::uint32_t t[4][256]{};
+	constexpr shift_table() noexcept {
+		for (std::size_t i = 0; i < 4; ++i) {
+			std::uint32_t basis[8];
+			for (std::size_t k = 0; k < 8; ++k) { basis[k] = multiply(std::uint32_t(1) << (8 * i + k), K); }
+			for (std::size_t b = 1; b < 256; ++b) {
+				std::size_t low = 0;
+				while (!((b >> low) & 1)) { ++low; }
+				t[i][b] = t[i][b & (b - 1)] ^ basis[low];
+			}
+		}
+	}
+	constexpr std::uint32_t operator()(std::uint32_t a) const noexcept {
+		return t[0][a & 0xff] ^ t[1][(a >> 8) & 0xff] ^ t[2][(a >> 16) & 0xff] ^ t[3][a >> 24];
+	}
+};
+template <std::uint32_t K> inline constexpr shift_table<K> shift_by{};
 
 inline std::uint64_t load64(const unsigned char* p) noexcept {
 	std::uint64_t v;
@@ -106,55 +124,102 @@ inline std::uint64_t load64(const unsigned char* p) noexcept {
 	return v;
 }
 
-// Defines NAME(crc, p, n): three lanes per 3 KiB stride, merged with shift constants, then 8-byte and 1-byte tails.
-#define CRC32C_HARDWARE(NAME, TARGET, STEP8, STEP1) \
-	__attribute__((target(TARGET))) inline std::uint32_t NAME(std::uint32_t crc, const unsigned char* p, std::size_t n) noexcept { \
-		for (; n >= 3 * lane; p += 3 * lane, n -= 3 * lane) { \
-			std::uint64_t a = crc, b = 0, c = 0; \
-			for (std::size_t i = 0; i < lane; i += 8) { \
-				a = STEP8(a, load64(p + i)); \
-				b = STEP8(b, load64(p + lane + i)); \
-				c = STEP8(c, load64(p + 2 * lane + i)); \
-			} \
-			crc = multiply(std::uint32_t(a), shift_two_lanes) ^ multiply(std::uint32_t(b), shift_one_lane) ^ std::uint32_t(c); \
-		} \
-		std::uint64_t v = crc; \
-		for (; n >= 8; p += 8, n -= 8) { v = STEP8(v, load64(p)); } \
-		crc = std::uint32_t(v); \
-		for (; n; ++p, --n) { crc = STEP1(crc, *p); } \
-		return crc; \
-	}
-
+#if CRC32C_X86 || CRC32C_ARM
 #if CRC32C_X86
-CRC32C_HARDWARE(x86_update, "sse4.2", _mm_crc32_u64, _mm_crc32_u8)
-inline bool hardware_available() noexcept {
-	static const bool available = __builtin_cpu_supports("sse4.2");
-	return available;
+#define CRC32C_TARGET "sse4.2"
+#define CRC32C_STEP8(c, v) _mm_crc32_u64((c), (v))
+#define CRC32C_STEP1(c, b) _mm_crc32_u8((c), (b))
+#else
+#define CRC32C_TARGET "+crc"
+#define CRC32C_STEP8(c, v) std::uint64_t(__crc32cd(std::uint32_t(c), (v)))
+#define CRC32C_STEP1(c, b) __crc32cb((c), (b))
+#endif
+
+// The lane sizes of the interleaved path, largest first; a stride is three lanes of one size, and three interleaved
+// streams hide the 3-cycle latency of the CRC instruction. A buffer shorter than the smallest stride takes the plain
+// loop. The smallest lane is the shortest at which a stride beats that loop in the benchmark: 128 bytes on x86-64,
+// 32 on AArch64.
+#if CRC32C_X86
+inline constexpr std::size_t lane_large = 1024, lane_middle = 256, lane_small = 128;
+#else
+inline constexpr std::size_t lane_large = 1024, lane_middle = 256, lane_small = 32;
+#endif
+inline constexpr std::size_t smallest_stride = 3 * lane_small;
+
+// One dependency chain of 8-byte steps, then bytes. A leaf with no frame: the path of small buffers.
+__attribute__((target(CRC32C_TARGET))) inline std::uint32_t hardware_plain(std::uint32_t crc, const unsigned char* p, std::size_t n) noexcept {
+	std::uint64_t v = crc;
+	for (; n >= 8; p += 8, n -= 8) { v = CRC32C_STEP8(v, load64(p)); }
+	crc = std::uint32_t(v);
+	for (; n; ++p, --n) { crc = CRC32C_STEP1(crc, *p); }
+	return crc;
 }
-#elif CRC32C_ARM
-#define CRC32C_ARM_STEP8(c, v) std::uint64_t(__crc32cd(std::uint32_t(c), (v)))
-CRC32C_HARDWARE(arm_update, "+crc", CRC32C_ARM_STEP8, __crc32cb)
-#undef CRC32C_ARM_STEP8
-inline bool hardware_available() noexcept {
-#if defined(__ARM_FEATURE_CRC32) || defined(__APPLE__)
-	return true;
-#elif defined(__linux__)
-	static const bool available = (getauxval(AT_HWCAP) & HWCAP_CRC32) != 0;
-	return available;
+
+// Whole strides of three `Lane`-byte lanes, merged with shift tables; advances the state, pointer and count.
+template <std::size_t Lane>
+__attribute__((target(CRC32C_TARGET), always_inline)) inline void hardware_strides(std::uint32_t& crc, const unsigned char*& p, std::size_t& n) noexcept {
+	constexpr auto& shift_one = shift_by<shift_factor(Lane)>;
+	constexpr auto& shift_two = shift_by<shift_factor(2 * Lane)>;
+	for (; n >= 3 * Lane; p += 3 * Lane, n -= 3 * Lane) {
+		std::uint64_t a = crc, b = 0, c = 0;
+		for (std::size_t i = 0; i < Lane; i += 8) {
+			a = CRC32C_STEP8(a, load64(p + i));
+			b = CRC32C_STEP8(b, load64(p + Lane + i));
+			c = CRC32C_STEP8(c, load64(p + 2 * Lane + i));
+		}
+		crc = shift_two(std::uint32_t(a)) ^ shift_one(std::uint32_t(b)) ^ std::uint32_t(c);
+	}
+}
+
+// Any length: strides of the large lanes, then the middle ones, then the small ones, then the plain loop on the rest.
+__attribute__((target(CRC32C_TARGET), noinline)) inline std::uint32_t hardware_update(std::uint32_t crc, const unsigned char* p, std::size_t n) noexcept {
+	hardware_strides<lane_large>(crc, p, n);
+	hardware_strides<lane_middle>(crc, p, n);
+	hardware_strides<lane_small>(crc, p, n);
+	return hardware_plain(crc, p, n);
+}
+
+#undef CRC32C_TARGET
+#undef CRC32C_STEP8
+#undef CRC32C_STEP1
+#endif
+
+// Whether the CPU has the instructions. The question is asked once and the answer kept in a constant-initialized
+// byte (0 not asked, 1 table, 2 hardware), so a call made at any point of start-up is safe and every later one is a
+// single relaxed load. Threads that ask at the same time get the same answer.
+inline bool cpu_has_hardware() noexcept {
+#if CRC32C_X86
+	__builtin_cpu_init();  // the CPU model is otherwise filled in by a constructor that may not have run yet
+	return __builtin_cpu_supports("sse4.2");
+#elif CRC32C_ARM && defined(__linux__)
+	return (getauxval(AT_HWCAP) & HWCAP_CRC32) != 0;
 #else
 	return false;
 #endif
 }
+
+inline std::atomic<std::uint8_t> hardware_state{0};
+
+__attribute__((noinline)) inline bool ask_hardware() noexcept {
+	std::uint8_t state = cpu_has_hardware() ? 2 : 1;
+	hardware_state.store(state, std::memory_order_relaxed);
+	return state == 2;
+}
+
+inline bool hardware_available() noexcept {
+#if CRC32C_ARM && (defined(__ARM_FEATURE_CRC32) || defined(__APPLE__))
+	return true;
+#elif CRC32C_X86 || (CRC32C_ARM && defined(__linux__))
+	std::uint8_t state = hardware_state.load(std::memory_order_relaxed);
+	return state ? state == 2 : ask_hardware();
 #else
-inline bool hardware_available() noexcept { return false; }
+	return false;
 #endif
-#undef CRC32C_HARDWARE
+}
 
 inline std::uint32_t update(std::uint32_t crc, const unsigned char* p, std::size_t n) noexcept {
-#if CRC32C_X86
-	if (hardware_available()) { return x86_update(crc, p, n); }
-#elif CRC32C_ARM
-	if (hardware_available()) { return arm_update(crc, p, n); }
+#if CRC32C_X86 || CRC32C_ARM
+	if (hardware_available()) { return n < smallest_stride ? hardware_plain(crc, p, n) : hardware_update(crc, p, n); }
 #endif
 	return table_update(crc, p, n);
 }

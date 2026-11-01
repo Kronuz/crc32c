@@ -11,7 +11,7 @@ int main() {
 	std::mt19937_64 rng(20261020);
 	std::vector<std::uint8_t> input;
 	std::size_t runs = 0;
-	for (std::size_t size : {0, 1, 4, 5, 6, 20, 63, 64, 65, 1029, 3077, 3200, 6200, 20000}) {
+	for (std::size_t size : {0, 1, 4, 5, 6, 20, 63, 64, 65, 101, 389, 773, 1029, 1100, 3077, 3200, 4000, 6200, 20000}) {
 		for (int round = 0; round < 40; ++round) {
 			input.resize(size);
 			for (auto& b : input) { b = static_cast<std::uint8_t>(rng()); }

@@ -4,6 +4,8 @@
 #include <algorithm>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
+#include <memory>
 #include <random>
 #include <string>
 #include <vector>
@@ -28,6 +30,20 @@ static std::uint32_t bitwise(const unsigned char* p, std::size_t n) {
 	}
 	return ~crc;
 }
+
+// The bitwise definition from an arbitrary raw state: no table, no instruction, independent of the library's paths.
+static std::uint32_t bitwise_from(std::uint32_t crc, const unsigned char* p, std::size_t n) {
+	for (std::size_t i = 0; i < n; ++i) {
+		crc ^= p[i];
+		for (int bit = 0; bit < 8; ++bit) { crc = (crc >> 1) ^ ((crc & 1) ? 0x82f63b78u : 0); }
+	}
+	return crc;
+}
+
+// The CPU's instructions as seen by a program that checksums while its namespace-scope objects are constructed. Some
+// toolchains fill in the CPU model in a constructor that has not run by then, and a detection cached too early would
+// keep the table path for the whole run.
+[[maybe_unused]] static const bool detected_before_main = kronuz::crc32c::detail::hardware_available();
 
 int main() {
 	// RFC 3720 (iSCSI) and the common check value.
@@ -108,21 +124,55 @@ int main() {
 		CHECK(crc.value() == reference(buffer.data(), 5000));
 	}
 
+#if CRC32C_X86 || CRC32C_ARM
 	// The hardware routine against the table routine from arbitrary states, lengths and alignments.
 	if (c32::detail::hardware_available()) {
 		for (int round = 0; round < 2000; ++round) {
 			auto state = static_cast<std::uint32_t>(rng());
 			std::size_t offset = rng() % 16, n = rng() % (round % 10 ? 1500 : 12000);
 			auto expected = c32::detail::table_update(state, buffer.data() + offset, n);
-#if CRC32C_X86
-			auto actual = c32::detail::x86_update(state, buffer.data() + offset, n);
-#else
-			auto actual = c32::detail::arm_update(state, buffer.data() + offset, n);
-#endif
-			CHECK(actual == expected);
+			CHECK(c32::detail::hardware_update(state, buffer.data() + offset, n) == expected);
 			CHECK(c32::detail::update(state, buffer.data() + offset, n) == expected);
 		}
 	}
+
+	// Below `smallest_stride` a buffer takes the plain loop, above it the interleaved path, one tier of lanes after
+	// another. Every hardware entry point against the bitwise oracle: random lengths 0 to 4096 at random alignments,
+	// then every length within 9 bytes of each tier's stride boundary and of each sum of whole strides of the three
+	// tiers (the last length below a boundary, the first at it, the byte after each lane merge, the tail steps), from
+	// random and extreme starting states. Each buffer is an exact-size heap block, so a read past its end is an
+	// AddressSanitizer error.
+	if (c32::detail::hardware_available()) {
+		auto check_hardware = [&](std::uint32_t state, std::size_t offset, std::size_t n) {
+			std::unique_ptr<unsigned char[]> block(new unsigned char[offset + n]);
+			std::memcpy(block.get(), buffer.data(), offset + n);
+			const unsigned char* p = block.get() + offset;
+			auto expected = bitwise_from(state, p, n);
+			CHECK(c32::detail::hardware_plain(state, p, n) == expected);
+			CHECK(c32::detail::hardware_update(state, p, n) == expected);
+			CHECK(c32::detail::update(state, p, n) == expected);
+			CHECK(c32::Crc32c(~state).update(p, n).value() == ~expected);
+		};
+		for (int round = 0; round < 3000; ++round) {
+			check_hardware(static_cast<std::uint32_t>(rng()), rng() % 16, rng() % 4097);
+		}
+		// Whole strides of each tier alone (every sum of strides below includes a, b or c of zero), then all three.
+		const std::size_t large = 3 * c32::detail::lane_large, middle = 3 * c32::detail::lane_middle, least = 3 * c32::detail::lane_small;
+		const std::uint32_t states[] = {0u, ~0u, 0x80000000u, static_cast<std::uint32_t>(rng())};
+		for (std::size_t a = 0; a <= 2; ++a) {
+			for (std::size_t b = 0; b <= 3; ++b) {
+				for (std::size_t c = 0; c <= 4; ++c) {
+					std::size_t edge = a * large + b * middle + c * least;
+					for (std::size_t n = edge > 9 ? edge - 9 : 0; n <= edge + 9; ++n) {
+						for (std::size_t offset : {std::size_t{0}, std::size_t{3}, std::size_t{15}}) {
+							for (auto state : states) { check_hardware(state, offset, n); }
+						}
+					}
+				}
+			}
+		}
+	}
+#endif
 
 	// Combine and resume.
 	for (int round = 0; round < 200; ++round) {
@@ -132,6 +182,12 @@ int main() {
 		CHECK(c32::crc32c_combine(ca, cb, b) == c32::crc32c(buffer.data(), a + b));
 		CHECK(c32::Crc32c(ca).update(buffer.data() + a, b).value() == c32::crc32c(buffer.data(), a + b));
 	}
+
+#if CRC32C_X86
+	// The detection that ran before main agrees with the CPU asked now.
+	__builtin_cpu_init();
+	CHECK(detected_before_main == static_cast<bool>(__builtin_cpu_supports("sse4.2")));
+#endif
 
 	// CI sets this on runners whose CPU has the instructions, so a test that quietly ran only the table fails.
 	if (std::getenv("CRC32C_REQUIRE_HARDWARE") && !c32::detail::hardware_available()) {
