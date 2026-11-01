@@ -7,83 +7,114 @@ Part of [Kronuz C++ Libraries](https://github.com/Kronuz/cpp-libraries), a colle
 ![C++20](https://img.shields.io/badge/C%2B%2B-20-blue.svg)
 ![Header-only](https://img.shields.io/badge/header--only-yes-green.svg)
 
-CRC-32C (Castagnoli) for C++20: hardware instructions on x86-64 (SSE4.2) and ARMv8,
-chosen at run time, a slice-by-8 table everywhere else and at compile time, and
-`crc32c_combine`. One header, no dependencies. It is the checksum of iSCSI, ext4,
-Btrfs and `kronuz::journal`.
+CRC-32C for C++20: SSE4.2 and ARMv8 instructions picked at run time, slice-by-8 elsewhere,
+constexpr and combine. The hardware routines run three interleaved lanes and are compiled with
+a function-level target attribute, so no global `-msse4.2` or `-march` flag is needed; a
+slice-by-8 table covers other CPUs and compile time. CRC-32C (Castagnoli) is the checksum of
+iSCSI, ext4, Btrfs and [journal](https://github.com/Kronuz/journal); reach for this one header
+when you need it fast and dependency-free.
 
-## Highlights
+## ✨ Highlights
 
-- **Hardware where the CPU has it.** `_mm_crc32_u64` on x86-64 and `__crc32cd` on
-  AArch64, in functions compiled with the target attribute, so no global `-msse4.2`
-  or `-march` flag is needed. Detection runs once.
-- **Three interleaved lanes** for buffers of 3 KiB and more, hiding the instruction's
-  latency; the lanes merge with shift constants computed at compile time.
-- **`constexpr`.** `static_assert(crc32c("123456789") == 0xe3069283)` works.
-- **Incremental and joinable.** `Crc32c` takes any number of pieces (empty ones
-  included) and can resume from a stored CRC; `crc32c_combine` gives the CRC of A‖B
-  from the two CRCs and B's length without rereading.
-- **No dependencies.** Standard library only; nothing is fetched.
+- **Hardware where the CPU has it.** `_mm_crc32_u64` on x86-64 and `__crc32cd` on AArch64,
+  detected once at run time.
+- **Three interleaved lanes.** Buffers of 3 KiB and more run three 1 KiB lanes at once to hide
+  the instruction's latency; shift constants computed at compile time merge the lanes.
+- **`constexpr`.** `static_assert(crc32c("123456789") == 0xe3069283)` compiles.
+- **Incremental and joinable.** `Crc32c` takes any number of pieces, empty ones included, and
+  resumes from a stored CRC; `crc32c_combine` gives the CRC of A‖B from the two CRCs and B's
+  length without rereading.
+- **No dependencies.** One header, standard library only; nothing is fetched.
 
-## Installation
+## 🚀 Quick start
 
-Requires a C++20 compiler and CMake 3.14 or newer.
+```cpp
+#include <crc32c/crc32c.hh>
+
+#include <cstdint>
+#include <cstdio>
+#include <string_view>
+
+namespace c32 = kronuz::crc32c;
+
+int main() {
+	std::string_view header = "header:", body = "the payload bytes";
+
+	std::uint32_t whole = c32::crc32c("header:the payload bytes");    // one shot
+	c32::Crc32c crc;                                                   // incremental
+	crc.update(header).update(body);
+	auto joined = c32::crc32c_combine(c32::crc32c(header), c32::crc32c(body), body.size());
+	static_assert(c32::crc32c("123456789") == 0xe3069283);            // constexpr
+
+	std::printf("%08x %08x %08x\n", whole, crc.value(), joined);       // 822f59d0 822f59d0 822f59d0
+}
+```
+
+[`examples/demo.cc`](examples/demo.cc) also resumes from a stored CRC and prints which path
+runs.
+
+## 📦 Installation
+
+Requires a C++20 compiler and CMake 3.14 or newer, and nothing else. CI builds it on Linux
+(x86_64, arm64), macOS (arm64, x86_64), and FreeBSD, plus ASan, UBSan, and TSan builds, and
+requires the hardware path on every runner whose CPU has the instructions.
 
 ```cmake
 include(FetchContent)
 FetchContent_Declare(crc32c
   GIT_REPOSITORY https://github.com/Kronuz/crc32c.git
-  GIT_TAG        <commit>)
+  GIT_TAG        b60a8e5fcda4cce04c5ea5b6e3eef1645c0da0b8)  # main tracks the tip
 FetchContent_MakeAvailable(crc32c)
 
 target_link_libraries(my_app PRIVATE crc32c::crc32c)
 ```
 
-## Quick start
+Then `#include <crc32c/crc32c.hh>`; everything is in `kronuz::crc32c`.
 
-```cpp
-#include <crc32c/crc32c.hh>
+## 🎯 When to use it
 
-namespace c32 = kronuz::crc32c;
+It fits storage formats, logs and network protocols that checksum with CRC-32C and want the
+hardware instruction without build flags.
 
-std::uint32_t c = c32::crc32c(data, size);                  // one shot
-c32::Crc32c crc;                                            // incremental
-crc.update(header, header_size).update(body, body_size);
-static_assert(c32::crc32c("123456789") == 0xe3069283);      // constexpr
-auto both = c32::crc32c_combine(crc_a, crc_b, size_b);      // CRC of A‖B without rereading
-auto more = c32::Crc32c(stored).update(next, n).value();    // resume from a stored CRC
-```
+Not for:
 
-`examples/demo.cc` runs all of these and prints which path is in use. The full
-interface is in [docs/API.md](docs/API.md).
+- **Other CRC-32 polynomials.** It computes Castagnoli's only; zlib's and Ethernet's CRC-32 is
+  a different function.
+- **Cryptographic integrity.** A CRC detects accidental corruption, not tampering.
 
-## Building and testing
+## 📚 Documentation
+
+- [docs/API.md](docs/API.md): the full interface.
+- [ARCHITECTURE.md](ARCHITECTURE.md): the three paths, the lane merge and combine.
+- [docs/BENCHMARKS.md](docs/BENCHMARKS.md): throughput per path.
+- [CHANGELOG.md](CHANGELOG.md): changes, newest first.
+- [AGENTS.md](AGENTS.md): repository map and rules.
+- [Catalog entry](https://github.com/Kronuz/cpp-libraries/blob/main/AGENTS.md#crc32c) in Kronuz
+  C++ Libraries.
+
+## 🛠️ Building and testing
 
 ```sh
 cmake -B build -DCMAKE_BUILD_TYPE=Release -DCRC32C_BUILD_BENCHMARKS=ON
 cmake --build build
 ctest --test-dir build --output-on-failure
-./build/crc32c_bench          # GB/s: hardware, slice-by-8, byte table
+./build/crc32c_bench
 ```
 
-[docs/BENCHMARKS.md](docs/BENCHMARKS.md) has the table measured before the move.
+The tests check the standard vectors, the hardware routine against the table routine at every
+length, alignment and starting state, every split around the lane and stride boundaries,
+random fragmentation with empty pieces, combine, and a consumer project that links only
+`crc32c::crc32c` with fetching disabled. The test prints `crc32c: hardware yes|no`;
+`CRC32C_REQUIRE_HARDWARE=1` makes `no` a failure. `crc32c_bench` prints GB/s for the hardware,
+slice-by-8 and byte-table paths. `-DCRC32C_FUZZ=ON` with Clang builds a libFuzzer target;
+without it a replay driver runs the same checks as a test.
 
-The tests check the standard vectors, the hardware routine against the table routine
-at every length, alignment and starting state, every split around the lane and stride
-boundaries, random fragmentation with empty pieces, combine, and a consumer project
-that links only `crc32c::crc32c` with fetching disabled. The test prints
-`crc32c: hardware yes|no`; `CRC32C_REQUIRE_HARDWARE=1` makes `no` a failure, which CI
-sets on runners whose CPU has the instructions. `-DCRC32C_FUZZ=ON` with Clang builds
-a libFuzzer target; without it a replay driver runs the same checks as a test.
+## 🤝 Contributing
 
-## Where it came from
+Issues and pull requests are welcome. Read [AGENTS.md](AGENTS.md) and the catalog's
+[rules of engagement](https://github.com/Kronuz/cpp-libraries/blob/main/AGENTS.md#rules-of-engagement)
+first; CI must pass on every platform.
 
-CRC-32C lived in [hashes](https://github.com/Kronuz/hashes) (`crc32c.hh`, namespace
-`hashes`) and as a byte table in [journal](https://github.com/Kronuz/journal). This is
-the one implementation; its history is the file's history in hashes. To migrate from
-hashes, include `<crc32c/crc32c.hh>` and replace `hashes::` with `kronuz::crc32c::`
-(`crc32c`, `Crc32c`, `crc32c_combine`); the values are the same.
+## 📄 License
 
-## License
-
-MIT, Copyright (c) 2026 Germán Méndez Bravo.
+MIT, Copyright (c) 2026 Germán Méndez Bravo. See [LICENSE](LICENSE).
