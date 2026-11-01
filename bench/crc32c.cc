@@ -1,5 +1,7 @@
 // CRC-32C throughput: the library's hardware path (the plain loop for short buffers, interleaved lanes above) against
-// a plain loop of the same instruction on one stream, the slice-by-8 table and the byte-at-a-time table.
+// a plain loop of the same instruction on one stream, the slice-by-8 table and the byte-at-a-time table and, when built
+// with CRC32C_BENCH_REFERENCE, Google's crc32c (https://github.com/google/crc32c), whose result must equal the
+// library's at every size.
 #include <crc32c/crc32c.hh>
 
 #include <chrono>
@@ -8,6 +10,10 @@
 #include <cstring>
 #include <random>
 #include <vector>
+
+#ifdef CRC32C_BENCH_REFERENCE
+#include <crc32c/crc32c.h>  // Google's: crc32c::Crc32c(const uint8_t*, size_t)
+#endif
 
 namespace c32 = kronuz::crc32c;
 
@@ -64,7 +70,11 @@ int main() {
 #else
 	const bool loop_available = false;
 #endif
+#ifdef CRC32C_BENCH_REFERENCE
+	std::printf("%-10s %12s %12s %12s %12s %12s\n", "bytes", "hw GB/s", "google GB/s", "loop GB/s", "slice8 GB/s", "byte GB/s");
+#else
 	std::printf("%-10s %12s %12s %12s %12s\n", "bytes", "hw GB/s", "loop GB/s", "slice8 GB/s", "byte GB/s");
+#endif
 	for (std::size_t n : {16u, 64u, 128u, 256u, 512u, 1024u, 2048u, 4096u, 65536u, 1u << 20}) {
 		auto hw = gb_per_s([&] { return c32::crc32c(data.data(), n); }, n);
 		double lp = 0;
@@ -77,16 +87,31 @@ int main() {
 			lp = gb_per_s([&] { return intrinsic_loop(data.data(), n); }, n);
 		}
 #endif
+#ifdef CRC32C_BENCH_REFERENCE
+		if (::crc32c::Crc32c(data.data(), n) != c32::crc32c(data.data(), n)) {
+			std::fprintf(stderr, "Google's crc32c disagrees with the library at %zu bytes\n", std::size_t{n});
+			return 1;
+		}
+		auto gg = gb_per_s([&] { return ::crc32c::Crc32c(data.data(), n); }, n);
+#endif
 		auto s8 = gb_per_s([&] { return ~c32::detail::table_update(~0u, data.data(), n); }, n);
 		auto b1 = gb_per_s([&] {
 			std::uint32_t crc = ~0u;
 			for (std::size_t i = 0; i < n; ++i) { crc = c32::detail::tables[0][(crc ^ data[i]) & 0xff] ^ (crc >> 8); }
 			return ~crc;
 		}, n);
+#ifdef CRC32C_BENCH_REFERENCE
+		if (loop_available) {
+			std::printf("%-10zu %12.2f %12.2f %12.2f %12.2f %12.2f\n", n, hw, gg, lp, s8, b1);
+		} else {
+			std::printf("%-10zu %12.2f %12.2f %12s %12.2f %12.2f\n", n, hw, gg, "n/a", s8, b1);
+		}
+#else
 		if (loop_available) {
 			std::printf("%-10zu %12.2f %12.2f %12.2f %12.2f\n", n, hw, lp, s8, b1);
 		} else {
 			std::printf("%-10zu %12.2f %12s %12.2f %12.2f\n", n, hw, "n/a", s8, b1);
 		}
+#endif
 	}
 }

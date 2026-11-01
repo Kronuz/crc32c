@@ -47,6 +47,30 @@ if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
   if(CRC32C_BUILD_BENCHMARKS)
     add_executable(crc32c_bench bench/crc32c.cc)
     target_link_libraries(crc32c_bench PRIVATE crc32c::crc32c)
+
+    # Reference: Google's crc32c, built for this benchmark only and never a dependency of the
+    # library. It is built in a project of its own because its target is also called crc32c.
+    #   cmake -B build -DCMAKE_BUILD_TYPE=Release -DCRC32C_BUILD_BENCHMARKS=ON -DCRC32C_BENCH_REFERENCE=ON
+    option(CRC32C_BENCH_REFERENCE "Build google/crc32c 1.1.2 as a benchmark-only reference" OFF)
+    if(CRC32C_BENCH_REFERENCE)
+      include(ExternalProject)
+      set(google_args -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=<INSTALL_DIR> -DCMAKE_INSTALL_LIBDIR=lib -DCMAKE_CXX_COMPILER=${CMAKE_CXX_COMPILER}
+        -DBUILD_SHARED_LIBS=OFF -DCRC32C_BUILD_TESTS=OFF -DCRC32C_BUILD_BENCHMARKS=OFF -DCRC32C_USE_GLOG=OFF)
+      if(CMAKE_OSX_ARCHITECTURES)
+        list(APPEND google_args -DCMAKE_OSX_ARCHITECTURES=${CMAKE_OSX_ARCHITECTURES})
+      endif()
+      ExternalProject_Add(google_crc32c
+        GIT_REPOSITORY https://github.com/google/crc32c.git
+        GIT_TAG        02e65f4fd3065d27b2e29324800ca6d04df16126  # 1.1.2
+        GIT_SUBMODULES ""  # its tests and benchmarks (submodules) are off
+        CMAKE_ARGS ${google_args}
+        BUILD_BYPRODUCTS <INSTALL_DIR>/lib/libcrc32c.a)
+      ExternalProject_Get_Property(google_crc32c INSTALL_DIR)
+      add_dependencies(crc32c_bench google_crc32c)
+      target_include_directories(crc32c_bench PRIVATE "${INSTALL_DIR}/include")
+      target_link_libraries(crc32c_bench PRIVATE "${INSTALL_DIR}/lib/libcrc32c.a")
+      target_compile_definitions(crc32c_bench PRIVATE CRC32C_BENCH_REFERENCE=1)
+    endif()
   endif()
 
   # libFuzzer target (Clang): cmake -DCRC32C_FUZZ=ON -DCMAKE_CXX_COMPILER=clang++
