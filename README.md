@@ -82,6 +82,35 @@ Not for:
   a different function.
 - **Cryptographic integrity.** A CRC detects accidental corruption, not tampering.
 
+## ⚡ Performance
+
+GB/s over one buffer per call, best of three runs of the benchmark (each best of 7 trials of
+0.2 s). `crc32c()` is the library's hardware path; `loop` is a plain loop of the CPU's own CRC
+instruction on one dependency chain (`_mm_crc32_u64` or `__crc32cd`), the code a caller writes
+without the library; `slice-by-8` is the library's table path. Every call starts a fresh CRC
+over the same bytes, so calls overlap in the CPU's pipeline and the small-buffer rows are
+throughput, not latency.
+
+| Bytes | M4 Pro: `crc32c()` | loop | slice-by-8 | i9: `crc32c()` | loop | slice-by-8 |
+|---:|---:|---:|---:|---:|---:|---:|
+| 64 | 29.8 | 30.2 | 5.0 | 14.2 | 21.1 | 3.1 |
+| 512 | 13.6 | 13.7 | 2.7 | 18.9 | 20.3 | 2.3 |
+| 4,096 | 18.1 | 10.9 | 2.5 | 17.9 | 12.3 | 2.2 |
+| 1 MiB | 22.4 | 10.6 | 2.4 | 20.3 | 11.1 | 2.2 |
+
+From 4 KiB the three interleaved lanes run 1.5 to 2.1 times faster than the plain loop. Below
+that `crc32c()` runs the same single chain, and on the i9 the plain loop is faster than it
+(21.1 against 14.2 GB/s at 64 bytes); on the M4 Pro the two are equal. Apple clang 17 on
+macOS, `-O3 -DNDEBUG`, on an Apple M4 Pro (arm64) and an Intel Core i9-9980HK (x86_64):
+
+```sh
+cmake -B build -DCMAKE_BUILD_TYPE=Release -DCRC32C_BUILD_BENCHMARKS=ON
+cmake --build build --target crc32c_bench
+./build/crc32c_bench
+```
+
+[docs/BENCHMARKS.md](docs/BENCHMARKS.md) has every size and the byte table.
+
 ## 📚 Documentation
 
 - [docs/API.md](docs/API.md): the full interface.
@@ -105,8 +134,8 @@ The tests check the standard vectors, the hardware routine against the table rou
 length, alignment and starting state, every split around the lane and stride boundaries,
 random fragmentation with empty pieces, combine, and a consumer project that links only
 `crc32c::crc32c` with fetching disabled. The test prints `crc32c: hardware yes|no`;
-`CRC32C_REQUIRE_HARDWARE=1` makes `no` a failure. `crc32c_bench` prints GB/s for the hardware,
-slice-by-8 and byte-table paths. `-DCRC32C_FUZZ=ON` with Clang builds a libFuzzer target;
+`CRC32C_REQUIRE_HARDWARE=1` makes `no` a failure. `crc32c_bench` prints GB/s for the hardware path, a plain loop of the CPU's CRC instruction, the
+slice-by-8 table and the byte table. `-DCRC32C_FUZZ=ON` with Clang builds a libFuzzer target;
 without it a replay driver runs the same checks as a test.
 
 ## 🤝 Contributing

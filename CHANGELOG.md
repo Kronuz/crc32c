@@ -4,6 +4,16 @@ All notable changes to `crc32c`, newest first. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); the library has no releases, so
 entries are dated.
 
+## 2026-11-01
+
+### Added
+
+- `crc32c_bench` prints a `loop` column: a plain loop of the CPU's CRC instruction on one
+  dependency chain, checked against `crc32c()` at every size. README and
+  [docs/BENCHMARKS.md](docs/BENCHMARKS.md) carry the table for an Apple M4 Pro and an Intel
+  Core i9-9980HK; on the i9 the plain loop is faster than `crc32c()` at 512 bytes and below
+  (21.1 against 14.2 GB/s at 64 bytes).
+
 ## 2026-10-22
 
 ### Added
