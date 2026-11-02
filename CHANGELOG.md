@@ -49,7 +49,8 @@ entries are dated.
 
 - `bench/crc32c.cc` times [Google's crc32c](https://github.com/google/crc32c) 1.1.2 beside the
   library, built only with `-DCRC32C_BENCH_REFERENCE=ON` in a project of its own, and checks
-  its result against the library's at every size before timing.
+  its result against the library's at every size before timing. CMake 4 builds it (the minimum
+  version its own CMakeLists declares is raised for the reference build only).
 - Tests of every hardware entry point against a bitwise oracle (no table, no instruction) at
   random lengths 0 to 4096 and alignments, and at every length within 9 bytes of each tier's
   stride boundary and of each sum of whole strides, from extreme and random starting states,
