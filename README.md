@@ -86,29 +86,47 @@ Not for:
 
 ## ⚡ Performance
 
-GB/s over one buffer per call, best of three runs of the benchmark (each best of 7 trials of
-0.2 s). `crc32c()` is the library's hardware path; `loop` is a plain loop of the CPU's own CRC
-instruction on one dependency chain (`_mm_crc32_u64` or `__crc32cd`), the code a caller writes
-without the library; `slice-by-8` is the library's table path. Every call starts a fresh CRC
-over the same bytes, so calls overlap in the CPU's pipeline and the small-buffer rows are
-throughput, not latency.
+GB/s over one buffer per call, best of two runs of `crc32c_bench` (each the best of 7 trials of
+0.2 s); higher is faster. The columns are four ways to compute the same CRC-32C, and the benchmark
+checks that the first three return the same value at every size before timing. `crc32c()` is the
+library's hardware path. *Google's* is [google/crc32c](https://github.com/google/crc32c) 1.1.2
+(`crc32c::Crc32c`), the widely used implementation, fetched and built for the benchmark only.
+`loop` is a plain loop of the CPU's own CRC instruction on one dependency chain (`_mm_crc32_u64` or
+`__crc32cd`), the code a caller writes without a library. `slice-by-8` is the library's table path.
+Every call starts a fresh CRC over the same bytes, so calls overlap in the CPU's pipeline and the
+small-buffer rows are throughput, not latency. Apple clang 17, `-O3 -DNDEBUG`.
 
-| Bytes | M4 Pro: `crc32c()` | loop | slice-by-8 | i9: `crc32c()` | loop | slice-by-8 |
-|---:|---:|---:|---:|---:|---:|---:|
-| 64 | 30.3 | 30.2 | 5.0 | 19.4 | 22.5 | 3.1 |
-| 128 | 28.7 | 23.9 | 3.9 | 28.6 | 30.8 | 2.7 |
-| 512 | 24.2 | 13.9 | 2.7 | 25.5 | 20.4 | 2.3 |
-| 1,024 | 28.0 | 12.1 | 2.5 | 25.6 | 17.2 | 2.2 |
-| 4,096 | 29.9 | 11.1 | 2.4 | 30.4 | 12.2 | 2.2 |
-| 1 MiB | 29.5 | 10.7 | 2.4 | 30.1 | 11.2 | 2.2 |
+Apple M4 Pro (macOS 26, arm64):
 
-Below the smallest stride (96 bytes on the M4 Pro, 384 on the i9) `crc32c()` runs the same plain
-chain as `loop`. Above it the lanes run 1.2 to 2.7 times faster than the plain loop on the M4
-Pro (from 128 bytes) and 1.25 to 2.7 times on the i9 (from 512 bytes). Apple clang 17 on
-macOS, `-O3 -DNDEBUG`, on an Apple M4 Pro (arm64) and an Intel Core i9-9980HK (x86_64):
+| Bytes | `crc32c()` | Google's | `loop` | `slice-by-8` |
+|---:|---:|---:|---:|---:|
+| 64 | 29.7 | 19.5 | 29.6 | 4.9 |
+| 128 | 27.9 | 21.2 | 23.3 | 3.8 |
+| 512 | 23.7 | 13.3 | 13.3 | 2.7 |
+| 1,024 | 27.2 | 11.3 | 11.6 | 2.5 |
+| 4,096 | 29.0 | 20.9 | 10.5 | 2.4 |
+| 1 MiB | 28.2 | 29.6 | 10.3 | 2.4 |
+
+Intel Core i9-9980HK (macOS 15, x86-64):
+
+| Bytes | `crc32c()` | Google's | `loop` | `slice-by-8` |
+|---:|---:|---:|---:|---:|
+| 64 | 14.1 | 11.2 | 20.5 | 3.0 |
+| 128 | 22.9 | 17.0 | 30.5 | 2.6 |
+| 512 | 24.9 | 17.3 | 19.9 | 2.3 |
+| 1,024 | 25.8 | 23.5 | 16.8 | 2.2 |
+| 4,096 | 29.9 | 30.1 | 12.0 | 2.2 |
+| 1 MiB | 29.5 | 30.5 | 10.9 | 2.2 |
+
+Below the smallest stride (96 bytes on the M4 Pro, 384 on the i9) `crc32c()` runs a plain chain like
+`loop`; on the i9 it reaches 0.7x to 0.75x of the loop's throughput from 16 to 128 bytes. Above the
+stride the lanes run 1.2 to 2.9 times faster than the plain loop on the M4 Pro (from 128 bytes) and
+1.25 to 2.8 times on the i9 (from 512 bytes). The library is 1.0x to 2.4x faster than Google's below
+4 KiB on both machines and level with it at 4 KiB on the i9. From 64 KiB Google's is level or
+ahead: by 8% at 64 KiB and 3% at 1 MiB on the i9, level at 64 KiB and by 5% at 1 MiB on the M4 Pro.
 
 ```sh
-cmake -B build -DCMAKE_BUILD_TYPE=Release -DCRC32C_BUILD_BENCHMARKS=ON
+cmake -B build -DCMAKE_BUILD_TYPE=Release -DCRC32C_BUILD_BENCHMARKS=ON -DCRC32C_BENCH_REFERENCE=ON
 cmake --build build --target crc32c_bench
 ./build/crc32c_bench
 ```
