@@ -8,6 +8,20 @@ entries are dated.
 
 ### Changed
 
+- `crc32c()` reaches the hardware routine without an out-of-line `detail::update()` in between.
+  The table loop is now `detail::table_update_out_of_line()`, so `update()` is a state check, a
+  length test and one call, and inlines into the caller. Before, Apple clang on x86-64 kept
+  `update()` out of line behind a frame of four saved registers (the inlined table loop wanted
+  them), and every short buffer paid a second call before the routine started. The test
+  `crc32c_codegen` compiles `test/codegen_probe.cc` and requires that `crc32c()` does not refer
+  to `update()`; it fails on the header of the commit before this one on Apple clang for x86-64.
+  GB/s, best of three interleaved rounds of `crc32c_bench` (0.08 s trials), i9-9980HK, START
+  (`b60a8e5`), before and after: 16 B 3.76, 3.94, 4.45; 64 B 13.75, 19.24, 19.10; 128 B 22.99,
+  28.13, 27.43; 4 KiB 17.78, 30.01, 29.92; 1 MiB 19.90, 30.91, 29.80. No row of the benchmark is
+  more than 2 percent below the commit before (median of the paired rounds). The M4 Pro is
+  unchanged (16 B: 13.58, 13.46, 13.50). A short-buffer path of inline assembly (the CRC
+  instruction with no call) was measured and is not in the library: 6.9 GB/s at 16 bytes, but 13
+  at 64 bytes and 14 at 128 against 19 and 27 for the call.
 - The hardware path runs in tiers: strides of three lanes of 1 KiB, then 256 bytes, then 128
   bytes (32 on AArch64), and a plain chain of the instruction below the smallest stride (384
   bytes on x86-64, 96 on AArch64) and for what the strides leave. The lanes merge through

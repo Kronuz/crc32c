@@ -217,12 +217,22 @@ inline bool hardware_available() noexcept {
 #endif
 }
 
-inline std::uint32_t update(std::uint32_t crc, const unsigned char* p, std::size_t n) noexcept {
 #if CRC32C_X86 || CRC32C_ARM
-	if (hardware_available()) { return n < smallest_stride ? hardware_plain(crc, p, n) : hardware_update(crc, p, n); }
-#endif
+// The table path, out of line. With its loop inlined, update() needs a frame of saved registers and is too big to
+// inline, so every call of a short buffer paid for a call and that frame before the hardware routine started.
+__attribute__((noinline)) inline std::uint32_t table_update_out_of_line(std::uint32_t crc, const unsigned char* p, std::size_t n) noexcept {
 	return table_update(crc, p, n);
 }
+
+inline std::uint32_t update(std::uint32_t crc, const unsigned char* p, std::size_t n) noexcept {
+	if (hardware_available()) [[likely]] { return n < smallest_stride ? hardware_plain(crc, p, n) : hardware_update(crc, p, n); }
+	return table_update_out_of_line(crc, p, n);
+}
+#else
+inline std::uint32_t update(std::uint32_t crc, const unsigned char* p, std::size_t n) noexcept {
+	return table_update(crc, p, n);
+}
+#endif
 
 }  // namespace detail
 

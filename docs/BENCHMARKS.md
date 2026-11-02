@@ -30,7 +30,7 @@ Intel Core i9-9980HK (macOS 15, x86-64):
 
 | Bytes | `crc32c()` | Google's | `loop` | `slice-by-8` | byte |
 |---:|---:|---:|---:|---:|---:|
-| 16 | 3.9 | 3.9 | 5.9 | 3.4 | 1.0 |
+| 16 | 4.4 | 3.9 | 5.9 | 3.4 | 1.0 |
 | 64 | 14.1 | 11.2 | 20.5 | 3.0 | 0.61 |
 | 128 | 22.9 | 17.0 | 30.5 | 2.6 | 0.55 |
 | 256 | 23.9 | 19.2 | 25.6 | 2.4 | 0.53 |
@@ -44,7 +44,9 @@ Intel Core i9-9980HK (macOS 15, x86-64):
 Every call starts a fresh CRC over the same bytes, so consecutive calls overlap in the CPU's
 pipeline; the rows of a few hundred bytes and below are throughput of independent calls, not
 the latency of one. At 16 bytes a call is one or two instructions, and the rows of 128 bytes and below move by 10 to
-30 percent with where the compiler places the benchmark's own loop, in either direction.
+30 percent with where the compiler places the benchmark's own loop, in either direction. The i9's
+16-byte `crc32c()` entry is the best of three interleaved runs with 0.08 s trials, taken with the
+START and previous-commit builds in the same rounds.
 
 `bench/crc32c.cc` reproduces the tables:
 

@@ -6,12 +6,19 @@ and the platform's intrinsics header, and defines three layers.
 ```
   crc32c(), Crc32c, crc32c_combine      public, constexpr where the table path allows
         |
-  detail::update(state, p, n)           picks the path; hardware detected once
+  detail::update(state, p, n)           picks the path; hardware detected once; inlined at the call
       /              |              \
-  hardware_plain   hardware_update   table_update
-  (one chain)      (lane tiers, then the plain loop)
+  hardware_plain   hardware_update   table_update_out_of_line
+  (one chain)      (lane tiers, then the plain loop)     (slice-by-8)
                    (target-attributed functions)
 ```
+
+`update()` is a state check, a length test and one call, small enough to inline into
+the caller: the table loop sits in its own out-of-line function, because inlined into
+`update()` it gave that function a frame of saved registers and kept it out of line, and
+every short buffer then paid for a second call before the hardware routine started.
+`test/codegen_probe.cc` compiles `crc32c()` to assembly and `crc32c_codegen` requires that
+nothing in it refers to `update()` (Apple clang on x86-64 shows it; other compilers inline it anyway).
 
 ## The paths
 

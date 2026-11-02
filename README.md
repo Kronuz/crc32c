@@ -119,7 +119,8 @@ Intel Core i9-9980HK (macOS 15, x86-64):
 | 1 MiB | 29.5 | 30.5 | 10.9 | 2.2 |
 
 Below the smallest stride (96 bytes on the M4 Pro, 384 on the i9) `crc32c()` runs a plain chain like
-`loop`; on the i9 it reaches 0.7x to 0.75x of the loop's throughput from 16 to 128 bytes. Above the
+`loop`; on the i9 it reaches 0.7x to 0.9x of the loop's throughput from 16 to 128 bytes, the
+ratio moving with where the compiler places the benchmark's own loop. Above the
 stride the lanes run 1.2 to 2.9 times faster than the plain loop on the M4 Pro (from 128 bytes) and
 1.25 to 2.8 times on the i9 (from 512 bytes). The library is 1.0x to 2.4x faster than Google's below
 4 KiB on both machines and level with it at 4 KiB on the i9. From 64 KiB Google's is level or

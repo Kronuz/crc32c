@@ -9,6 +9,7 @@ usage in `README.md` and `docs/API.md`.
 include/crc32c/crc32c.hh   The library: Crc32c, crc32c(), crc32c_combine(), detail:: routines. Header only.
 test/crc32c_test.cc        Vectors, hardware vs table and vs the bitwise oracle at every length/alignment/state around every tier boundary, fragments, empty updates, combine, detection before main.
 test/consumer/             A project that links only crc32c::crc32c with fetching disabled (CTest crc32c_consumer).
+test/codegen_probe.cc      crc32c() as a call site sees it; test/check_codegen.cmake compiles it to assembly and requires no out-of-line detail::update() (CTest crc32c_codegen).
 fuzz/fuzz_update.cc        libFuzzer target; fuzz/replay.cc runs it as a test (CTest crc32c_fuzz_replay).
 examples/demo.cc           A tour: one shot, incremental, constexpr, combine, resume, which path runs.
 bench/crc32c.cc            GB/s: hardware vs a plain instruction loop vs slice-by-8 vs byte table (-DCRC32C_BUILD_BENCHMARKS=ON).
@@ -45,9 +46,16 @@ Sanitizers: add `-DCMAKE_CXX_FLAGS="-fsanitize=address,undefined"`. Fuzz: Clang 
   loop (a merge per few steps), one that is too long leaves a long remainder on the slow chain.
 - **No tier may fall behind the loop below it.** The plain loop is the baseline: `crc32c_bench`
   prints it as `loop`, and `crc32c()` must match it below the smallest stride.
+- **`detail::update()` stays small.** The table loop lives in `table_update_out_of_line()`; put it
+  back into `update()` and Apple clang on x86-64 keeps `update()` out of line behind a frame of
+  four saved registers, a second call in front of every short buffer (`crc32c_codegen`).
 
 ## Gotchas
 
+- Short buffers on x86-64 cannot inline into a caller without SSE4.2: `hardware_plain` is a call.
+  An inline-assembly path (`crc32q` with no call) measured 6.9 GB/s at 16 bytes on the i9 against
+  4.4 for the call, and 13 against 19 at 64 bytes; it is not in the library. Measure every size
+  from 8 to 384 bytes before trying it again.
 - `CRC32C_X86` / `CRC32C_ARM` leak from the header (they gate the test's choice of
   routine); keep them prefixed.
 - Detection calls `__builtin_cpu_init()` before `__builtin_cpu_supports`: on macOS the CPU

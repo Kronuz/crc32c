@@ -37,6 +37,16 @@ if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
         "-DCRC32C_SOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}"
       --test-command "${CMAKE_CURRENT_BINARY_DIR}/consumer/consumer")
 
+  # crc32c() must reach the hardware routine without an out-of-line detail::update() in between: the
+  # check compiles test/codegen_probe.cc to assembly (GNU-style compilers on x86-64 and AArch64).
+  string(TOLOWER "${CMAKE_SYSTEM_PROCESSOR}" crc32c_processor)
+  if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang" AND crc32c_processor MATCHES "^(x86_64|amd64|arm64|aarch64)$")
+    add_test(NAME crc32c_codegen COMMAND ${CMAKE_COMMAND}
+      -DCXX=${CMAKE_CXX_COMPILER} -DSRC=${CMAKE_CURRENT_SOURCE_DIR}/test/codegen_probe.cc
+      -DINC=${CMAKE_CURRENT_SOURCE_DIR}/include
+      -P ${CMAKE_CURRENT_SOURCE_DIR}/test/check_codegen.cmake)
+  endif()
+
   # A runnable tour of the library (not a test): build & run ./build/crc32c_demo
   add_executable(crc32c_demo examples/demo.cc)
   target_link_libraries(crc32c_demo PRIVATE crc32c::crc32c)

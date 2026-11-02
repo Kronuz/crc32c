@@ -136,6 +136,30 @@ int main() {
 		}
 	}
 
+	// The table path as update() falls back to it, out of line, against the bitwise oracle from arbitrary states.
+	for (int round = 0; round < 400; ++round) {
+		auto state = static_cast<std::uint32_t>(rng());
+		std::size_t offset = rng() % 16, n = rng() % (round % 5 ? 400 : 5000);
+		CHECK(c32::detail::table_update_out_of_line(state, buffer.data() + offset, n) == bitwise_from(state, buffer.data() + offset, n));
+	}
+#if CRC32C_X86 || (CRC32C_ARM && !defined(__APPLE__) && !defined(__ARM_FEATURE_CRC32))
+	// A CPU without the instructions, forced: update() and the public calls take the table path and give the same
+	// values; the detected state is put back.
+	{
+		const auto detected = c32::detail::hardware_state.load();
+		c32::detail::hardware_state.store(1);
+		CHECK(!c32::detail::hardware_available());
+		for (int round = 0; round < 300; ++round) {
+			auto state = static_cast<std::uint32_t>(rng());
+			std::size_t offset = rng() % 16, n = rng() % (round % 5 ? 400 : 5000);
+			CHECK(c32::detail::update(state, buffer.data() + offset, n) == bitwise_from(state, buffer.data() + offset, n));
+			CHECK(c32::crc32c(buffer.data() + offset, n) == ~bitwise_from(~0u, buffer.data() + offset, n));
+		}
+		c32::detail::hardware_state.store(detected);
+		CHECK(c32::detail::hardware_available() == (detected == 2));
+	}
+#endif
+
 	// Below `smallest_stride` a buffer takes the plain loop, above it the interleaved path, one tier of lanes after
 	// another. Every hardware entry point against the bitwise oracle: random lengths 0 to 4096 at random alignments,
 	// then every length within 9 bytes of each tier's stride boundary and of each sum of whole strides of the three
